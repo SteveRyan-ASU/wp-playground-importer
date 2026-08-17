@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: PHP and WordPress Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2
+          coverage: none
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: PHP lint
+        run: composer lint
+
+      - name: WordPress Coding Standards
+        run: composer phpcs
+
+      - name: Start wp-env
+        run: npm run env:start
+
+      - name: Activate plugin
+        run: npm run env:activate
+
+      - name: PHPUnit integration tests
+        run: npm test
+
+      - name: WP-CLI smoke check
+        run: npm run env:cli -- plugin list
+
+      - name: Stop wp-env
+        if: always()
+        run: npm run env:stop

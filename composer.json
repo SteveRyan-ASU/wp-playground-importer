@@ -1,0 +1,44 @@
+{
+	"name": "steveryan-asu/wp-playground-importer",
+	"description": "A WordPress plugin scaffold for importing WordPress Playground exports into conventional WordPress installations.",
+	"version": "0.1.0",
+	"type": "wordpress-plugin",
+	"license": "GPL-2.0-or-later",
+	"require": {
+		"php": ">=8.3"
+	},
+	"require-dev": {
+		"dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+		"phpunit/phpunit": "^9.6",
+		"squizlabs/php_codesniffer": "^3.13",
+		"wp-coding-standards/wpcs": "^3.4",
+		"yoast/phpunit-polyfills": "^3.1"
+	},
+	"autoload": {
+		"psr-4": {
+			"WP_Playground_Importer\\": "src/"
+		}
+	},
+	"autoload-dev": {
+		"psr-4": {
+			"WP_Playground_Importer\\Tests\\": "tests/phpunit/"
+		}
+	},
+	"config": {
+		"allow-plugins": {
+			"dealerdirect/phpcodesniffer-composer-installer": true
+		},
+		"sort-packages": true
+	},
+	"scripts": {
+		"lint": "find . -path ./vendor -prune -o -path ./node_modules -prune -o -name '*.php' -print0 | xargs -0 -n 1 php -l",
+		"phpcs": "phpcs",
+		"phpcbf": "phpcbf",
+		"test": "phpunit",
+		"check": [
+			"@lint",
+			"@phpcs",
+			"@test"
+		]
+	}
+}

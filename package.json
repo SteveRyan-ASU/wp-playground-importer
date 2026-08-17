@@ -1,0 +1,23 @@
+{
+	"name": "wp-playground-importer",
+	"version": "0.1.0",
+	"description": "Development scaffold for the WordPress Playground Importer plugin.",
+	"license": "GPL-2.0-or-later",
+	"private": true,
+	"scripts": {
+		"env:start": "wp-env start",
+		"env:stop": "wp-env stop",
+		"env:destroy": "wp-env destroy",
+		"env:reset": "wp-env destroy --force && wp-env start && wp-env run cli wp plugin activate wp-playground-importer",
+		"env:activate": "wp-env run cli wp plugin activate wp-playground-importer",
+		"env:cli": "wp-env run cli wp",
+		"test": "wp-env run tests-cli --env-cwd=wp-content/plugins/wp-playground-importer composer test",
+		"lint": "composer lint",
+		"phpcs": "composer phpcs",
+		"phpcbf": "composer phpcbf",
+		"check": "composer lint && composer phpcs && npm test"
+	},
+	"devDependencies": {
+		"@wordpress/env": "^11.11.0"
+	}
+}

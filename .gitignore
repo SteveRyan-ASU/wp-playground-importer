@@ -32,6 +32,15 @@ wp-config.php
 # Log files
 *.log
 
+# Dependencies
+/vendor/
+/node_modules/
+
+# Tooling caches and local wp-env state
+/.wp-env/
+/.phpunit.result.cache
+/.phpunit.cache/
+
 # htaccess
 /.htaccess
 

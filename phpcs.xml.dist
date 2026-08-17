@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<ruleset name="WP Playground Importer">
+	<description>WordPress Coding Standards for WP Playground Importer.</description>
+
+	<file>wp-playground-importer.php</file>
+	<file>src</file>
+	<file>tests</file>
+
+	<exclude-pattern>vendor/*</exclude-pattern>
+	<exclude-pattern>node_modules/*</exclude-pattern>
+
+	<rule ref="WordPress">
+		<!-- Project classes use PSR-4 autoloading, which intentionally keeps class-based filenames. -->
+		<exclude name="WordPress.Files.FileName"/>
+	</rule>
+	<rule ref="WordPress-Extra"/>
+	<rule ref="WordPress-Docs"/>
+
+	<config name="testVersion" value="8.3-"/>
+	<config name="minimum_supported_wp_version" value="6.8"/>
+
+	<arg name="extensions" value="php"/>
+	<arg name="parallel" value="8"/>
+	<arg value="sp"/>
+</ruleset>
