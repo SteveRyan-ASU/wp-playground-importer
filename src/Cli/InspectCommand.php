@@ -11,6 +11,7 @@ namespace WP_Playground_Importer\Cli;
 
 use WP_CLI;
 use WP_Playground_Importer\Destination\DestinationInspector;
+use WP_Playground_Importer\Destination\WordPressDestinationWriter;
 use WP_Playground_Importer\Import\ImportPlanner;
 use WP_Playground_Importer\Package\PackageInspectionException;
 use WP_Playground_Importer\Package\PackageReader;
@@ -25,6 +26,7 @@ final class InspectCommand {
 	public static function register(): void {
 		WP_CLI::add_command( 'playground-importer inspect', array( self::class, 'inspect' ) );
 		WP_CLI::add_command( 'playground-importer plan', array( self::class, 'plan' ) );
+		WP_CLI::add_command( 'playground-importer execute', array( self::class, 'execute' ) );
 	}
 
 	/**
@@ -112,6 +114,47 @@ final class InspectCommand {
 	}
 
 	/**
+	 * Execute the experimental Milestone 4 writer for supported posts/pages only.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <zip>
+	 * : Path to a local Playground export ZIP.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp playground-importer execute /tmp/playground-export.zip
+	 *
+	 * @param array<int, string>        $args Positional arguments.
+	 * @param array<string, string|int> $assoc_args Associative arguments.
+	 */
+	public static function execute( array $args, array $assoc_args ): void {
+		unset( $assoc_args );
+
+		$zip_path = $args[0] ?? '';
+		$reader   = new PackageReader();
+
+		try {
+			$package     = $reader->inspect( $zip_path );
+			$destination = ( new DestinationInspector() )->inspect();
+			$plan        = ( new ImportPlanner() )->plan( $package, $destination );
+			$result      = ( new WordPressDestinationWriter() )->execute( $plan );
+		} catch ( PackageInspectionException $exception ) {
+			WP_CLI::error(
+				sprintf(
+					'%s: %s',
+					$exception->get_error_code(),
+					$exception->get_user_message()
+				)
+			);
+		}
+
+		$result_data = $result->to_array();
+		self::render_execute_summary( $result_data );
+		WP_CLI::line( wp_json_encode( $result_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+	}
+
+	/**
 	 * Render a human-readable planning summary.
 	 *
 	 * @param array<string, mixed> $plan Plan data.
@@ -160,5 +203,21 @@ final class InspectCommand {
 		foreach ( $plan['warnings'] as $warning ) {
 			WP_CLI::line( sprintf( '  - %s: %s', $warning['code'], $warning['message'] ) );
 		}
+	}
+
+	/**
+	 * Render execution summary.
+	 *
+	 * @param array<string, mixed> $result Result data.
+	 */
+	private static function render_execute_summary( array $result ): void {
+		WP_CLI::line( 'WP Playground Importer experimental execution result' );
+		WP_CLI::line( 'Scope: published core posts/pages only' );
+		WP_CLI::line( sprintf( 'Planned executable records: %d', $result['planned_executable_records'] ) );
+		WP_CLI::line( sprintf( 'Created records: %d', $result['created_records'] ) );
+		WP_CLI::line( sprintf( 'Skipped records: %d', count( $result['skipped_records'] ) ) );
+		WP_CLI::line( sprintf( 'Blocking errors: %d', count( $result['blocking_errors'] ) ) );
+		WP_CLI::line( sprintf( 'Failed records: %d', count( $result['failed_records'] ) ) );
+		WP_CLI::line( '' );
 	}
 }

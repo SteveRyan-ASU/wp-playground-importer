@@ -16,6 +16,7 @@ final class MigrationAction {
 	public const MIGRATE              = 'migrate';
 	public const REMAP                = 'remap';
 	public const PRESERVE_DESTINATION = 'preserve_destination';
+	public const SKIP                 = 'skip';
 	public const REVIEW               = 'review';
 	public const UNSUPPORTED          = 'unsupported';
 

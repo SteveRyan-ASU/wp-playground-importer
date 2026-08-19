@@ -130,10 +130,41 @@ The plan uses these action classifications:
 - `migrate`: source data should eventually be reproduced on the destination
 - `remap`: source data is meaningful but requires ID or URL transformation
 - `preserve_destination`: destination value should not be overwritten by source data
+- `skip`: source data is understood and deliberately excluded
 - `review`: behavior is uncertain and requires a future decision
 - `unsupported`: reserved for explicitly unsupported future cases
 
 The CLI is only a developer planning surface. Planning does not create content, copy uploads, install themes/plugins, activate anything, migrate options, rewrite URLs, allocate IDs, or modify either database.
+
+## Experimental Execution
+
+Milestone 4 adds a deliberately narrow developer-only execution command:
+
+```bash
+npm run env:cli -- playground-importer execute wp-content/plugins/wp-playground-importer/local-playground-exports/example.zip
+```
+
+Execution is not a full importer. It only creates executable source records that are:
+
+- core `post` or `page`
+- `publish` status
+- backed by a safe destination author mapping
+- running against a `fresh_or_nearly_fresh` single-site destination
+
+Execution refuses to run when the destination is populated, multisite is detected, or a safe author mapping cannot be established. There is no force, merge, overwrite, rollback, duplicate-detection, or production mode.
+
+The writer uses `wp_insert_post()` and returns a structured result containing planned executable records, created records, source-ID to destination-ID map, skipped records, failed records, blockers, warnings, and deferred work.
+
+Status behavior for core posts/pages:
+
+- `publish`: executable and created
+- `auto-draft`: skipped
+- `trash`: skipped
+- `draft`: skipped for now
+
+Revisions are explicitly skipped. Attachments, navigation, templates, template parts, global styles, custom post types, postmeta, taxonomy data, options, themes, plugins, uploads, and URL rewriting remain deferred.
+
+Run the same export only against disposable `wp-env` environments. A second execution against the same destination is expected to be blocked once the destination is populated; idempotent imports are intentionally not implemented yet.
 
 ## Checks and Tests
 

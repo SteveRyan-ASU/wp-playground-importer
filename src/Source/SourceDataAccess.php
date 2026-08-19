@@ -326,7 +326,7 @@ final class SourceDataAccess {
 	private function get_content_items( SQLite3 $database, string $prefix ): array {
 		$result = $database->query(
 			sprintf(
-				'SELECT ID, post_author, post_parent, post_type, post_status, post_title, guid FROM %s ORDER BY ID',
+				'SELECT ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, menu_order, comment_status, ping_status, post_password, guid FROM %s ORDER BY ID',
 				$this->quote_identifier( $prefix . 'posts' )
 			)
 		);
@@ -340,14 +340,25 @@ final class SourceDataAccess {
 
 		while ( false !== $row ) {
 			$items[] = array(
-				'id'            => (int) ( $row['ID'] ?? 0 ),
-				'author_id'     => (int) ( $row['post_author'] ?? 0 ),
-				'parent_id'     => (int) ( $row['post_parent'] ?? 0 ),
-				'type'          => (string) ( $row['post_type'] ?? '' ),
-				'status'        => (string) ( $row['post_status'] ?? '' ),
-				'title'         => (string) ( $row['post_title'] ?? '' ),
-				'guid'          => (string) ( $row['guid'] ?? '' ),
-				'attached_file' => $this->get_post_meta( $database, $prefix, (int) ( $row['ID'] ?? 0 ), '_wp_attached_file' ),
+				'id'             => (int) ( $row['ID'] ?? 0 ),
+				'author_id'      => (int) ( $row['post_author'] ?? 0 ),
+				'parent_id'      => (int) ( $row['post_parent'] ?? 0 ),
+				'type'           => (string) ( $row['post_type'] ?? '' ),
+				'status'         => (string) ( $row['post_status'] ?? '' ),
+				'title'          => (string) ( $row['post_title'] ?? '' ),
+				'content'        => (string) ( $row['post_content'] ?? '' ),
+				'excerpt'        => (string) ( $row['post_excerpt'] ?? '' ),
+				'slug'           => (string) ( $row['post_name'] ?? '' ),
+				'post_date'      => (string) ( $row['post_date'] ?? '' ),
+				'post_date_gmt'  => (string) ( $row['post_date_gmt'] ?? '' ),
+				'modified'       => (string) ( $row['post_modified'] ?? '' ),
+				'modified_gmt'   => (string) ( $row['post_modified_gmt'] ?? '' ),
+				'menu_order'     => (int) ( $row['menu_order'] ?? 0 ),
+				'comment_status' => (string) ( $row['comment_status'] ?? 'closed' ),
+				'ping_status'    => (string) ( $row['ping_status'] ?? 'closed' ),
+				'password'       => (string) ( $row['post_password'] ?? '' ),
+				'guid'           => (string) ( $row['guid'] ?? '' ),
+				'attached_file'  => $this->get_post_meta( $database, $prefix, (int) ( $row['ID'] ?? 0 ), '_wp_attached_file' ),
 			);
 			$row     = $result->fetchArray( SQLITE3_ASSOC );
 		}

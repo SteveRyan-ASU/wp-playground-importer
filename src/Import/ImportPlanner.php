@@ -72,6 +72,7 @@ final class ImportPlanner {
 					MigrationAction::MIGRATE,
 					MigrationAction::REMAP,
 					MigrationAction::PRESERVE_DESTINATION,
+					MigrationAction::SKIP,
 					MigrationAction::REVIEW,
 					MigrationAction::UNSUPPORTED,
 				),
@@ -84,6 +85,7 @@ final class ImportPlanner {
 				),
 				'destination'          => $destination_data,
 				'content'              => $content['plan'],
+				'executable_content'   => $content['operations'],
 				'users'                => $users['plan'],
 				'options'              => $options['plan'],
 				'theme'                => $theme['plan'],
@@ -104,11 +106,12 @@ final class ImportPlanner {
 	 * @return array<string, mixed>
 	 */
 	private function plan_content( array $source ): array {
-		$warnings = array();
-		$items    = array();
+		$warnings   = array();
+		$items      = array();
+		$operations = array();
 
 		foreach ( $source['content_summary'] as $post_type => $statuses ) {
-			$action = in_array( $post_type, self::KNOWN_MIGRATABLE_POST_TYPES, true ) ? MigrationAction::MIGRATE : MigrationAction::REVIEW;
+			$action = $this->aggregate_content_action( $post_type );
 
 			if ( MigrationAction::REVIEW === $action ) {
 				$warnings[] = $this->warning( 'unknown_post_type', 'Source contains a post type whose migration behavior requires review.', array( 'post_type' => $post_type ) );
@@ -121,10 +124,99 @@ final class ImportPlanner {
 			);
 		}
 
+		foreach ( $source['content_items'] as $item ) {
+			$record_action = $this->record_content_action( $item );
+			$operation     = array(
+				'source_id'     => $item['id'],
+				'post_type'     => $item['type'],
+				'post_status'   => $item['status'],
+				'post_title'    => $item['title'],
+				'action'        => $record_action['action'],
+				'reason'        => $record_action['reason'],
+				'is_executable' => MigrationAction::MIGRATE === $record_action['action'] && in_array( $item['type'], array( 'post', 'page' ), true ),
+				'source_record' => $item,
+				'deferred_work' => $this->deferred_work_for_record( $item ),
+			);
+
+			$operations[] = $operation;
+		}
+
 		return array(
-			'plan'     => $items,
-			'warnings' => $warnings,
+			'plan'       => $items,
+			'operations' => $operations,
+			'warnings'   => $warnings,
 		);
+	}
+
+	/**
+	 * Get aggregate content action by post type.
+	 *
+	 * @param string $post_type Post type.
+	 * @return string
+	 */
+	private function aggregate_content_action( string $post_type ): string {
+		if ( 'revision' === $post_type ) {
+			return MigrationAction::SKIP;
+		}
+
+		return in_array( $post_type, self::KNOWN_MIGRATABLE_POST_TYPES, true ) ? MigrationAction::MIGRATE : MigrationAction::REVIEW;
+	}
+
+	/**
+	 * Get per-record content action.
+	 *
+	 * @param array<string, mixed> $item Source content item.
+	 * @return array<string, string>
+	 */
+	private function record_content_action( array $item ): array {
+		if ( in_array( $item['status'], array( 'auto-draft', 'trash' ), true ) ) {
+			return array(
+				'action' => MigrationAction::SKIP,
+				'reason' => 'Transient or deleted source content is intentionally excluded.',
+			);
+		}
+
+		if ( 'revision' === $item['type'] ) {
+			return array(
+				'action' => MigrationAction::SKIP,
+				'reason' => 'Revision history is intentionally excluded from the MVP writer.',
+			);
+		}
+
+		if ( in_array( $item['type'], array( 'post', 'page' ), true ) && 'publish' === $item['status'] ) {
+			return array(
+				'action' => MigrationAction::MIGRATE,
+				'reason' => 'Published core posts and pages are executable in Milestone 4.',
+			);
+		}
+
+		if ( in_array( $item['type'], array( 'post', 'page' ), true ) ) {
+			return array(
+				'action' => MigrationAction::SKIP,
+				'reason' => 'Only published core posts and pages are executable in Milestone 4.',
+			);
+		}
+
+		return array(
+			'action' => MigrationAction::REVIEW,
+			'reason' => 'This post type remains planning-only for this milestone.',
+		);
+	}
+
+	/**
+	 * Explain relationship work deferred for a record.
+	 *
+	 * @param array<string, mixed> $item Source content item.
+	 * @return array<int, string>
+	 */
+	private function deferred_work_for_record( array $item ): array {
+		$deferred = array();
+
+		if ( 0 < (int) $item['parent_id'] ) {
+			$deferred[] = 'post_parent_remap';
+		}
+
+		return $deferred;
 	}
 
 	/**
@@ -142,7 +234,7 @@ final class ImportPlanner {
 				'home', 'siteurl', 'upload_path' => MigrationAction::PRESERVE_DESTINATION,
 				'page_on_front', 'page_for_posts' => MigrationAction::REMAP,
 				'show_on_front', 'permalink_structure', 'template', 'stylesheet' => MigrationAction::MIGRATE,
-				'active_plugins' => MigrationAction::REVIEW,
+				'active_plugins' => MigrationAction::PRESERVE_DESTINATION,
 				default => MigrationAction::REVIEW,
 			};
 
@@ -288,7 +380,7 @@ final class ImportPlanner {
 	 * @return array<string, mixed>
 	 */
 	private function plan_users( array $source, array $destination ): array {
-		$admin    = $destination['users']['administrators'][0] ?? null;
+		$admin    = $this->resolve_destination_author( $destination );
 		$plans    = array();
 		$warnings = array();
 
@@ -311,6 +403,25 @@ final class ImportPlanner {
 			'plan'     => $plans,
 			'warnings' => $warnings,
 		);
+	}
+
+	/**
+	 * Resolve a deterministic destination author for MVP execution.
+	 *
+	 * @param array<string, mixed> $destination Destination data.
+	 * @return array<string, mixed>|null
+	 */
+	private function resolve_destination_author( array $destination ): ?array {
+		$current_user_id = (int) ( $destination['users']['current_user_id'] ?? 0 );
+		$administrators  = $destination['users']['administrators'];
+
+		foreach ( $administrators as $administrator ) {
+			if ( $current_user_id > 0 && (int) $administrator['id'] === $current_user_id ) {
+				return $administrator;
+			}
+		}
+
+		return 1 === count( $administrators ) ? $administrators[0] : null;
 	}
 
 	/**

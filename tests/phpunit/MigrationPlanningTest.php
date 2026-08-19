@@ -11,6 +11,7 @@ namespace WP_Playground_Importer\Tests;
 
 use SQLite3;
 use WP_Playground_Importer\Destination\DestinationInspector;
+use WP_Playground_Importer\Destination\WordPressDestinationWriter;
 use WP_Playground_Importer\Import\ImportPlanner;
 use WP_Playground_Importer\Import\MigrationAction;
 use WP_Playground_Importer\Package\PackageReader;
@@ -66,6 +67,9 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 		$this->assertSame( MigrationAction::PRESERVE_DESTINATION, $this->option_action( $plan, 'home' ) );
 		$this->assertSame( MigrationAction::REMAP, $this->option_action( $plan, 'page_on_front' ) );
 		$this->assertSame( MigrationAction::REVIEW, $this->content_action( $plan, 'book' ) );
+		$this->assertSame( MigrationAction::SKIP, $this->content_action( $plan, 'revision' ) );
+		$this->assertSame( 2, count( $this->executable_operations( $plan ) ) );
+		$this->assertSame( 3, count( $this->skipped_operations( $plan ) ) );
 		$this->assertSame( 'not_installed', $plan['theme']['status'] );
 		$this->assertSame( 'not_installed', $plan['plugins'][0]['status'] );
 		$this->assertSame( array( 'abc_plugin_data' ), $plan['tables']['additional_tables'] );
@@ -107,6 +111,75 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Writer creates only executable published posts/pages and returns an ID map.
+	 */
+	public function test_executes_published_posts_and_pages_only(): void {
+		$zip_path = $this->create_playground_zip( 'exec_' );
+		$plan     = $this->plan_zip_object( $zip_path );
+		$result   = ( new WordPressDestinationWriter() )->execute( $plan )->to_array();
+
+		$this->assertSame( 2, $result['planned_executable_records'] );
+		$this->assertSame( 2, $result['created_records'] );
+		$this->assertSame( array(), $result['blocking_errors'] );
+		$this->assertArrayHasKey( '1', $result['id_map'] );
+		$this->assertArrayHasKey( '2', $result['id_map'] );
+		$this->assertNotSame( 1, $result['id_map']['1'] );
+		$this->assertSame( 3, count( $result['skipped_records'] ) );
+
+		$post = get_post( $result['id_map']['1'] );
+		$page = get_post( $result['id_map']['2'] );
+
+		$this->assertSame( 'post', $post->post_type );
+		$this->assertSame( 'Hello', $post->post_title );
+		$this->assertSame( 'Source post body', $post->post_content );
+		$this->assertSame( 1, (int) $post->post_author );
+		$this->assertSame( 0, (int) $page->post_parent );
+		$this->assertSame( 'page', $page->post_type );
+		$this->assertSame( 'Front', $page->post_title );
+		$this->assertEmpty(
+			get_posts(
+				array(
+					'post_type'   => 'revision',
+					'post_status' => 'inherit',
+				)
+			)
+		);
+		$this->assertEmpty(
+			get_posts(
+				array(
+					'post_type'   => 'attachment',
+					'post_status' => 'inherit',
+				)
+			)
+		);
+	}
+
+	/**
+	 * Writer refuses populated destinations before creating records.
+	 */
+	public function test_execution_blocks_populated_destination(): void {
+		self::factory()->post->create(
+			array(
+				'post_title'  => 'Existing One',
+				'post_status' => 'publish',
+			)
+		);
+		self::factory()->post->create(
+			array(
+				'post_title'  => 'Existing Two',
+				'post_status' => 'publish',
+			)
+		);
+
+		$before = wp_count_posts()->publish;
+		$result = ( new WordPressDestinationWriter() )->execute( $this->plan_zip_object( $this->create_playground_zip( 'block_' ) ) )->to_array();
+
+		$this->assertSame( $before, wp_count_posts()->publish );
+		$this->assertSame( 0, $result['created_records'] );
+		$this->assertSame( 'destination_populated', $result['blocking_errors'][0]['code'] );
+	}
+
+	/**
 	 * Create a migration plan for a synthetic Playground package.
 	 *
 	 * @param string $prefix Source table prefix.
@@ -123,10 +196,20 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 	 * @return array<string, mixed>
 	 */
 	private function plan_zip( string $zip_path ): array {
+		return $this->plan_zip_object( $zip_path )->to_array();
+	}
+
+	/**
+	 * Plan a ZIP path and return the plan object.
+	 *
+	 * @param string $zip_path ZIP path.
+	 * @return \WP_Playground_Importer\Import\MigrationPlan
+	 */
+	private function plan_zip_object( string $zip_path ): \WP_Playground_Importer\Import\MigrationPlan {
 		$package     = ( new PackageReader() )->inspect( $zip_path );
 		$destination = ( new DestinationInspector() )->inspect();
 
-		return ( new ImportPlanner() )->plan( $package, $destination )->to_array();
+		return ( new ImportPlanner() )->plan( $package, $destination );
 	}
 
 	/**
@@ -161,6 +244,36 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Get executable operations.
+	 *
+	 * @param array<string, mixed> $plan Plan.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function executable_operations( array $plan ): array {
+		return array_values(
+			array_filter(
+				$plan['executable_content'],
+				static fn ( array $operation ): bool => ! empty( $operation['is_executable'] )
+			)
+		);
+	}
+
+	/**
+	 * Get skipped operations.
+	 *
+	 * @param array<string, mixed> $plan Plan.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function skipped_operations( array $plan ): array {
+		return array_values(
+			array_filter(
+				$plan['executable_content'],
+				static fn ( array $operation ): bool => MigrationAction::SKIP === $operation['action']
+			)
+		);
 	}
 
 	/**
@@ -239,7 +352,7 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 		$database      = new SQLite3( $database_path );
 
 		$database->exec( sprintf( 'CREATE TABLE %soptions (option_name TEXT PRIMARY KEY, option_value TEXT)', $prefix ) );
-		$database->exec( sprintf( 'CREATE TABLE %sposts (ID INTEGER PRIMARY KEY, post_author INTEGER DEFAULT 0, post_parent INTEGER DEFAULT 0, post_type TEXT, post_status TEXT, post_title TEXT, guid TEXT)', $prefix ) );
+		$database->exec( sprintf( 'CREATE TABLE %sposts (ID INTEGER PRIMARY KEY, post_author INTEGER DEFAULT 0, post_parent INTEGER DEFAULT 0, post_type TEXT, post_status TEXT, post_title TEXT, post_content TEXT, post_excerpt TEXT, post_name TEXT, post_date TEXT, post_date_gmt TEXT, post_modified TEXT, post_modified_gmt TEXT, menu_order INTEGER DEFAULT 0, comment_status TEXT, ping_status TEXT, post_password TEXT, guid TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %spostmeta (meta_id INTEGER PRIMARY KEY, post_id INTEGER, meta_key TEXT, meta_value TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %sterms (term_id INTEGER PRIMARY KEY, name TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %sterm_taxonomy (term_taxonomy_id INTEGER PRIMARY KEY, term_id INTEGER, taxonomy TEXT)', $prefix ) );
@@ -259,11 +372,14 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 		$this->insert_option( $database, $prefix, 'active_plugins', serialize( array( 'example-plugin/example-plugin.php' ) ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize
 
 		$database->exec( sprintf( "INSERT INTO %susers (ID, user_login, user_email, display_name) VALUES (7, 'source_admin', 'admin@localhost', 'Source Admin')", $prefix ) );
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, guid) VALUES (1, 7, 0, 'post', 'publish', 'Hello', 'https://source.example/?p=1')", $prefix ) );
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, guid) VALUES (2, 7, 1, 'page', 'publish', 'Front', 'https://source.example/?page_id=2')", $prefix ) );
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, guid) VALUES (3, 7, 0, 'attachment', 'inherit', 'Image', 'https://source.example/wp-content/uploads/2026/08/image.jpg')", $prefix ) );
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, guid) VALUES (4, 7, 0, 'wp_navigation', 'publish', 'Nav', '')", $prefix ) );
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, guid) VALUES (5, 7, 0, 'book', 'publish', 'Book', '')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (1, 7, 0, 'post', 'publish', 'Hello', 'Source post body', '', 'hello-source', '2026-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00', 'open', 'closed', '', 'https://source.example/?p=1')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (2, 7, 1, 'page', 'publish', 'Front', 'Source page body', '', 'front-source', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00', 'closed', 'closed', '', 'https://source.example/?page_id=2')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (3, 7, 0, 'attachment', 'inherit', 'Image', '', '', 'image', '2026-01-03 00:00:00', '2026-01-03 00:00:00', '2026-01-03 00:00:00', '2026-01-03 00:00:00', 'closed', 'closed', '', 'https://source.example/wp-content/uploads/2026/08/image.jpg')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (4, 7, 0, 'wp_navigation', 'publish', 'Nav', '', '', 'nav', '2026-01-04 00:00:00', '2026-01-04 00:00:00', '2026-01-04 00:00:00', '2026-01-04 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (5, 7, 0, 'book', 'publish', 'Book', '', '', 'book', '2026-01-05 00:00:00', '2026-01-05 00:00:00', '2026-01-05 00:00:00', '2026-01-05 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (6, 7, 0, 'post', 'auto-draft', 'Auto Draft', '', '', '', '2026-01-06 00:00:00', '2026-01-06 00:00:00', '2026-01-06 00:00:00', '2026-01-06 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (7, 7, 0, 'page', 'trash', 'Trash Page', '', '', 'trash-page', '2026-01-07 00:00:00', '2026-01-07 00:00:00', '2026-01-07 00:00:00', '2026-01-07 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (8, 7, 1, 'revision', 'inherit', 'Revision', '', '', '1-revision-v1', '2026-01-08 00:00:00', '2026-01-08 00:00:00', '2026-01-08 00:00:00', '2026-01-08 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %spostmeta (post_id, meta_key, meta_value) VALUES (1, '_thumbnail_id', '3')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %spostmeta (post_id, meta_key, meta_value) VALUES (3, '_wp_attached_file', '2026/08/image.jpg')", $prefix ) );
 		$database->exec( sprintf( 'INSERT INTO %sterm_relationships (object_id, term_taxonomy_id) VALUES (1, 1)', $prefix ) );

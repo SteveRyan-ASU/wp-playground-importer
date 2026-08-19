@@ -279,7 +279,7 @@ final class PackageInspectionTest extends WP_UnitTestCase {
 		$database      = new SQLite3( $database_path );
 
 		$database->exec( sprintf( 'CREATE TABLE %soptions (option_name TEXT PRIMARY KEY, option_value TEXT)', $prefix ) );
-		$database->exec( sprintf( 'CREATE TABLE %sposts (ID INTEGER PRIMARY KEY, post_author INTEGER DEFAULT 0, post_parent INTEGER DEFAULT 0, post_type TEXT, post_status TEXT, post_title TEXT, guid TEXT)', $prefix ) );
+		$database->exec( sprintf( 'CREATE TABLE %sposts (ID INTEGER PRIMARY KEY, post_author INTEGER DEFAULT 0, post_parent INTEGER DEFAULT 0, post_type TEXT, post_status TEXT, post_title TEXT, post_content TEXT, post_excerpt TEXT, post_name TEXT, post_date TEXT, post_date_gmt TEXT, post_modified TEXT, post_modified_gmt TEXT, menu_order INTEGER DEFAULT 0, comment_status TEXT, ping_status TEXT, post_password TEXT, guid TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %spostmeta (meta_id INTEGER PRIMARY KEY, post_id INTEGER, meta_key TEXT, meta_value TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %sterms (term_id INTEGER PRIMARY KEY, name TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %sterm_taxonomy (term_taxonomy_id INTEGER PRIMARY KEY, term_id INTEGER, taxonomy TEXT)', $prefix ) );
@@ -295,8 +295,8 @@ final class PackageInspectionTest extends WP_UnitTestCase {
 		$this->insert_option( $database, $prefix, 'active_plugins', serialize( array( 'hello/hello.php' ) ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize
 
 		$database->exec( sprintf( "INSERT INTO %susers (ID, user_login, user_email, display_name) VALUES (1, 'admin', 'admin@localhost', 'Admin')", $prefix ) );
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, guid) VALUES (1, 1, 0, 'post', 'publish', 'Hello', 'https://source.example/?p=1')", $prefix ) );
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, guid) VALUES (2, 1, 1, 'page', 'draft', 'Draft Page', 'https://source.example/?page_id=2')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (1, 1, 0, 'post', 'publish', 'Hello', 'Content', '', 'hello', '2026-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00', 'closed', 'closed', '', 'https://source.example/?p=1')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (2, 1, 1, 'page', 'draft', 'Draft Page', 'Draft content', '', 'draft-page', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00', 'closed', 'closed', '', 'https://source.example/?page_id=2')", $prefix ) );
 
 		$database->close();
 
