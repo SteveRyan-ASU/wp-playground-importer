@@ -14,7 +14,7 @@ use WP_Playground_Importer\Import\MigrationAction;
 use WP_Playground_Importer\Import\MigrationPlan;
 
 /**
- * Narrow destination writer for supported Milestone 4 content.
+ * Narrow destination writer for supported Milestone 5 content and relationships.
  */
 final class WordPressDestinationWriter {
 	/**
@@ -33,17 +33,53 @@ final class WordPressDestinationWriter {
 					'planned_executable_records' => $this->count_executable_operations( $plan_data ),
 					'created_records'            => 0,
 					'id_map'                     => array(),
+					'post_id_map'                => array(),
+					'term_id_map'                => array(),
 					'skipped_records'            => $this->skipped_operations( $plan_data ),
 					'failed_records'             => array(),
 					'blocking_errors'            => $blockers,
 					'warnings'                   => $plan_data['warnings'],
 					'deferred_work'              => $this->deferred_work( $plan_data ),
+					'relationships'              => array(
+						'post_parents'    => array(
+							'applied'  => array(),
+							'deferred' => $plan_data['relationships']['post_parents'] ?? array(),
+							'failed'   => array(),
+						),
+						'taxonomy'        => array(
+							'applied'  => array(),
+							'deferred' => $plan_data['taxonomy']['relationships'] ?? array(),
+							'failed'   => array(),
+						),
+						'featured_images' => array(
+							'deferred' => $plan_data['metadata']['defer'] ?? array(),
+						),
+					),
+					'metadata'                   => array(
+						'migrated' => array(),
+						'skipped'  => $plan_data['metadata']['migrate'] ?? array(),
+						'deferred' => $plan_data['metadata']['defer'] ?? array(),
+						'review'   => $plan_data['metadata']['review'] ?? array(),
+					),
+					'taxonomy'                   => array(
+						'term_id_map'   => array(),
+						'created'       => array(),
+						'reused'        => array(),
+						'deferred'      => $plan_data['taxonomy']['terms'] ?? array(),
+						'failed'        => array(),
+						'relationships' => array(
+							'applied'  => array(),
+							'deferred' => $plan_data['taxonomy']['relationships'] ?? array(),
+							'failed'   => array(),
+						),
+					),
 				)
 			);
 		}
 
-		$id_map = array();
-		$failed = array();
+		$id_map   = array();
+		$failed   = array();
+		$term_map = array();
 
 		foreach ( $plan_data['executable_content'] as $operation ) {
 			if ( empty( $operation['is_executable'] ) ) {
@@ -64,16 +100,38 @@ final class WordPressDestinationWriter {
 			$id_map[ (string) $operation['source_id'] ] = $result;
 		}
 
+		$taxonomy_result      = $this->migrate_terms( $plan_data );
+		$term_map             = $taxonomy_result['term_id_map'];
+		$parent_relationships = $this->apply_parent_relationships( $plan_data, $id_map );
+		$metadata_result      = $this->migrate_metadata( $plan_data, $id_map );
+		$term_relationships   = $this->assign_terms( $plan_data, $id_map, $term_map );
+
 		return new WriteResult(
 			array(
 				'planned_executable_records' => $this->count_executable_operations( $plan_data ),
 				'created_records'            => count( $id_map ),
 				'id_map'                     => $id_map,
+				'post_id_map'                => $id_map,
+				'term_id_map'                => $term_map,
 				'skipped_records'            => $this->skipped_operations( $plan_data ),
 				'failed_records'             => $failed,
 				'blocking_errors'            => array(),
 				'warnings'                   => $plan_data['warnings'],
 				'deferred_work'              => $this->deferred_work( $plan_data ),
+				'relationships'              => array(
+					'post_parents'    => $parent_relationships,
+					'taxonomy'        => $term_relationships,
+					'featured_images' => array(
+						'deferred' => $plan_data['metadata']['defer'] ?? array(),
+					),
+				),
+				'metadata'                   => $metadata_result,
+				'taxonomy'                   => array_merge(
+					$taxonomy_result,
+					array(
+						'relationships' => $term_relationships,
+					)
+				),
 			)
 		);
 	}
@@ -153,6 +211,224 @@ final class WordPressDestinationWriter {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Create or reuse supported taxonomy terms.
+	 *
+	 * @param array<string, mixed> $plan Plan data.
+	 * @return array<string, mixed>
+	 */
+	private function migrate_terms( array $plan ): array {
+		$result = array(
+			'term_id_map' => array(),
+			'created'     => array(),
+			'reused'      => array(),
+			'deferred'    => array(),
+			'failed'      => array(),
+		);
+
+		foreach ( $plan['taxonomy']['terms'] ?? array() as $term ) {
+			if ( empty( $term['is_executable'] ) ) {
+				$result['deferred'][] = $term;
+				continue;
+			}
+
+			$destination_term = term_exists( $term['slug'], $term['taxonomy'] );
+
+			if ( 0 === $destination_term || null === $destination_term ) {
+				$destination_term = term_exists( $term['name'], $term['taxonomy'] );
+			}
+
+			if ( 0 !== $destination_term && null !== $destination_term ) {
+				$destination_id                                     = is_array( $destination_term ) ? (int) $destination_term['term_id'] : (int) $destination_term;
+				$result['term_id_map'][ (string) $term['term_id'] ] = $destination_id;
+				$result['reused'][]                                 = array(
+					'source_term_id'      => $term['term_id'],
+					'destination_term_id' => $destination_id,
+					'taxonomy'            => $term['taxonomy'],
+				);
+				continue;
+			}
+
+			$inserted = wp_insert_term(
+				$term['name'],
+				$term['taxonomy'],
+				array(
+					'slug'        => $term['slug'],
+					'description' => $term['description'],
+				)
+			);
+
+			if ( $inserted instanceof WP_Error ) {
+				$result['failed'][] = array(
+					'source_term_id' => $term['term_id'],
+					'taxonomy'       => $term['taxonomy'],
+					'error'          => $inserted->get_error_code(),
+					'message'        => $inserted->get_error_message(),
+				);
+				continue;
+			}
+
+			$destination_id                                     = (int) $inserted['term_id'];
+			$result['term_id_map'][ (string) $term['term_id'] ] = $destination_id;
+			$result['created'][]                                = array(
+				'source_term_id'      => $term['term_id'],
+				'destination_term_id' => $destination_id,
+				'taxonomy'            => $term['taxonomy'],
+			);
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Apply source parent relationships using destination IDs.
+	 *
+	 * @param array<string, mixed> $plan Plan data.
+	 * @param array<string, int>   $id_map Source to destination post map.
+	 * @return array<string, array<int, array<string, mixed>>>
+	 */
+	private function apply_parent_relationships( array $plan, array $id_map ): array {
+		$result = array(
+			'applied'  => array(),
+			'deferred' => array(),
+			'failed'   => array(),
+		);
+
+		foreach ( $plan['relationships']['post_parents'] ?? array() as $relationship ) {
+			$source_id = (string) $relationship['source_id'];
+			$parent_id = (string) $relationship['parent_source_id'];
+
+			if ( ! isset( $id_map[ $source_id ], $id_map[ $parent_id ] ) ) {
+				$result['deferred'][] = array_merge(
+					$relationship,
+					array(
+						'reason' => 'Parent relationship could not be applied because one side was not migrated.',
+					)
+				);
+				continue;
+			}
+
+			$updated = wp_update_post(
+				wp_slash(
+					array(
+						'ID'          => $id_map[ $source_id ],
+						'post_parent' => $id_map[ $parent_id ],
+					)
+				),
+				true
+			);
+
+			if ( $updated instanceof WP_Error ) {
+				$result['failed'][] = array(
+					'source_id'        => (int) $relationship['source_id'],
+					'parent_source_id' => (int) $relationship['parent_source_id'],
+					'error'            => $updated->get_error_code(),
+					'message'          => $updated->get_error_message(),
+				);
+				continue;
+			}
+
+			$result['applied'][] = array(
+				'source_id'             => (int) $relationship['source_id'],
+				'parent_source_id'      => (int) $relationship['parent_source_id'],
+				'destination_id'        => $id_map[ $source_id ],
+				'destination_parent_id' => $id_map[ $parent_id ],
+			);
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Migrate allowlisted post metadata.
+	 *
+	 * @param array<string, mixed> $plan Plan data.
+	 * @param array<string, int>   $id_map Source to destination post map.
+	 * @return array<string, array<int, array<string, mixed>>>
+	 */
+	private function migrate_metadata( array $plan, array $id_map ): array {
+		$result = array(
+			'migrated' => array(),
+			'skipped'  => array(),
+			'deferred' => $plan['metadata']['defer'] ?? array(),
+			'review'   => $plan['metadata']['review'] ?? array(),
+		);
+
+		foreach ( $plan['metadata']['migrate'] ?? array() as $meta ) {
+			$source_post_id = (string) $meta['source_post_id'];
+
+			if ( ! isset( $id_map[ $source_post_id ] ) ) {
+				$result['skipped'][] = array_merge(
+					$meta,
+					array(
+						'reason' => 'Metadata belongs to a source post that was not migrated.',
+					)
+				);
+				continue;
+			}
+
+			// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+			update_post_meta( $id_map[ $source_post_id ], $meta['meta_key'], wp_slash( $meta['meta_value'] ) );
+			$result['migrated'][] = array(
+				'source_post_id'      => (int) $meta['source_post_id'],
+				'destination_post_id' => $id_map[ $source_post_id ],
+				// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+				'meta_key'            => $meta['meta_key'],
+			);
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Assign supported taxonomy relationships.
+	 *
+	 * @param array<string, mixed> $plan Plan data.
+	 * @param array<string, int>   $id_map Source to destination post map.
+	 * @param array<string, int>   $term_map Source to destination term map.
+	 * @return array<string, array<int, array<string, mixed>>>
+	 */
+	private function assign_terms( array $plan, array $id_map, array $term_map ): array {
+		$result = array(
+			'applied'  => array(),
+			'deferred' => array(),
+			'failed'   => array(),
+		);
+
+		foreach ( $plan['taxonomy']['relationships'] ?? array() as $relationship ) {
+			$source_id = (string) $relationship['object_source_id'];
+			$term_id   = (string) $relationship['term_id'];
+
+			if ( empty( $relationship['is_executable'] ) || ! isset( $id_map[ $source_id ], $term_map[ $term_id ] ) ) {
+				$result['deferred'][] = $relationship;
+				continue;
+			}
+
+			$assigned = wp_set_object_terms( $id_map[ $source_id ], array( $term_map[ $term_id ] ), $relationship['taxonomy'], true );
+
+			if ( $assigned instanceof WP_Error ) {
+				$result['failed'][] = array(
+					'object_source_id' => (int) $relationship['object_source_id'],
+					'term_id'          => (int) $relationship['term_id'],
+					'taxonomy'         => $relationship['taxonomy'],
+					'error'            => $assigned->get_error_code(),
+					'message'          => $assigned->get_error_message(),
+				);
+				continue;
+			}
+
+			$result['applied'][] = array(
+				'object_source_id'      => (int) $relationship['object_source_id'],
+				'source_term_id'        => (int) $relationship['term_id'],
+				'destination_object_id' => $id_map[ $source_id ],
+				'destination_term_id'   => $term_map[ $term_id ],
+				'taxonomy'              => $relationship['taxonomy'],
+			);
+		}
+
+		return $result;
 	}
 
 	/**

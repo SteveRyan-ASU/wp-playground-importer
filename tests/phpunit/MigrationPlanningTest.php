@@ -58,8 +58,8 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 		$this->assertSame( 'abc_', $plan['source']['table_prefix'] );
 		$this->assertSame( MigrationAction::REMAP, $plan['urls']['action'] );
 		$this->assertSame( MigrationAction::REMAP, $plan['relationships']['action'] );
-		$this->assertSame( 1, $plan['relationships']['summary']['post_parents'] );
-		$this->assertSame( 1, $plan['relationships']['summary']['featured_images'] );
+		$this->assertSame( 3, $plan['relationships']['summary']['post_parents'] );
+		$this->assertSame( 2, $plan['relationships']['summary']['featured_images'] );
 		$this->assertSame( 1, $plan['files']['attachments'] );
 		$this->assertSame( 2, $plan['files']['upload_files_in_package'] );
 		$this->assertSame( 1, $plan['files']['matched_attachment_files'] );
@@ -68,8 +68,13 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 		$this->assertSame( MigrationAction::REMAP, $this->option_action( $plan, 'page_on_front' ) );
 		$this->assertSame( MigrationAction::REVIEW, $this->content_action( $plan, 'book' ) );
 		$this->assertSame( MigrationAction::SKIP, $this->content_action( $plan, 'revision' ) );
-		$this->assertSame( 2, count( $this->executable_operations( $plan ) ) );
+		$this->assertSame( 3, count( $this->executable_operations( $plan ) ) );
 		$this->assertSame( 3, count( $this->skipped_operations( $plan ) ) );
+		$this->assertSame( 2, count( $plan['metadata']['defer'] ) );
+		$this->assertSame( 1, count( $plan['metadata']['migrate'] ) );
+		$this->assertSame( 1, count( $plan['metadata']['review'] ) );
+		$this->assertSame( 2, count( $this->executable_taxonomy_terms( $plan ) ) );
+		$this->assertSame( 3, count( $plan['relationships']['post_parents'] ) );
 		$this->assertSame( 'not_installed', $plan['theme']['status'] );
 		$this->assertSame( 'not_installed', $plan['plugins'][0]['status'] );
 		$this->assertSame( array( 'abc_plugin_data' ), $plan['tables']['additional_tables'] );
@@ -118,11 +123,12 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 		$plan     = $this->plan_zip_object( $zip_path );
 		$result   = ( new WordPressDestinationWriter() )->execute( $plan )->to_array();
 
-		$this->assertSame( 2, $result['planned_executable_records'] );
-		$this->assertSame( 2, $result['created_records'] );
+		$this->assertSame( 3, $result['planned_executable_records'] );
+		$this->assertSame( 3, $result['created_records'] );
 		$this->assertSame( array(), $result['blocking_errors'] );
 		$this->assertArrayHasKey( '1', $result['id_map'] );
 		$this->assertArrayHasKey( '2', $result['id_map'] );
+		$this->assertArrayHasKey( '9', $result['id_map'] );
 		$this->assertNotSame( 1, $result['id_map']['1'] );
 		$this->assertSame( 3, count( $result['skipped_records'] ) );
 
@@ -133,14 +139,30 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 		$this->assertSame( 'Hello', $post->post_title );
 		$this->assertSame( 'Source post body', $post->post_content );
 		$this->assertSame( 1, (int) $post->post_author );
-		$this->assertSame( 0, (int) $page->post_parent );
+		$this->assertSame( $result['id_map']['9'], (int) $page->post_parent );
 		$this->assertSame( 'page', $page->post_type );
 		$this->assertSame( 'Front', $page->post_title );
+		$this->assertSame( 0, (int) get_post( $result['id_map']['9'] )->post_parent );
+		$this->assertSame( 'templates/full-width.php', get_post_meta( $result['id_map']['2'], '_wp_page_template', true ) );
+		$this->assertSame( '', get_post_meta( $result['id_map']['1'], '_custom_plugin_setting', true ) );
+		$this->assertSame( '', get_post_meta( $result['id_map']['1'], '_thumbnail_id', true ) );
+		$this->assertTrue( has_term( 'news', 'category', $result['id_map']['1'] ) );
+		$this->assertTrue( has_term( 'desert', 'post_tag', $result['id_map']['1'] ) );
+		$this->assertArrayHasKey( '10', $result['term_id_map'] );
+		$this->assertArrayHasKey( '11', $result['term_id_map'] );
+		$this->assertSame( 1, count( $result['relationships']['post_parents']['applied'] ) );
+		$this->assertSame( 2, count( $result['relationships']['post_parents']['deferred'] ) );
+		$this->assertSame( 1, count( $result['metadata']['migrated'] ) );
+		$this->assertSame( 2, count( $result['metadata']['deferred'] ) );
+		$this->assertSame( 1, count( $result['metadata']['review'] ) );
+		$this->assertSame( 2, count( $result['taxonomy']['relationships']['applied'] ) );
+		$this->assertSame( 1, count( $result['taxonomy']['relationships']['deferred'] ) );
 		$this->assertEmpty(
 			get_posts(
 				array(
 					'post_type'   => 'revision',
 					'post_status' => 'inherit',
+					'title'       => 'Revision',
 				)
 			)
 		);
@@ -308,6 +330,21 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Get executable taxonomy terms.
+	 *
+	 * @param array<string, mixed> $plan Plan.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function executable_taxonomy_terms( array $plan ): array {
+		return array_values(
+			array_filter(
+				$plan['taxonomy']['terms'],
+				static fn ( array $term ): bool => ! empty( $term['is_executable'] )
+			)
+		);
+	}
+
+	/**
 	 * Snapshot representative destination state.
 	 *
 	 * @return array<string, mixed>
@@ -385,8 +422,8 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 		$database->exec( sprintf( 'CREATE TABLE %soptions (option_name TEXT PRIMARY KEY, option_value TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %sposts (ID INTEGER PRIMARY KEY, post_author INTEGER DEFAULT 0, post_parent INTEGER DEFAULT 0, post_type TEXT, post_status TEXT, post_title TEXT, post_content TEXT, post_excerpt TEXT, post_name TEXT, post_date TEXT, post_date_gmt TEXT, post_modified TEXT, post_modified_gmt TEXT, menu_order INTEGER DEFAULT 0, comment_status TEXT, ping_status TEXT, post_password TEXT, guid TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %spostmeta (meta_id INTEGER PRIMARY KEY, post_id INTEGER, meta_key TEXT, meta_value TEXT)', $prefix ) );
-		$database->exec( sprintf( 'CREATE TABLE %sterms (term_id INTEGER PRIMARY KEY, name TEXT)', $prefix ) );
-		$database->exec( sprintf( 'CREATE TABLE %sterm_taxonomy (term_taxonomy_id INTEGER PRIMARY KEY, term_id INTEGER, taxonomy TEXT)', $prefix ) );
+		$database->exec( sprintf( 'CREATE TABLE %sterms (term_id INTEGER PRIMARY KEY, name TEXT, slug TEXT)', $prefix ) );
+		$database->exec( sprintf( 'CREATE TABLE %sterm_taxonomy (term_taxonomy_id INTEGER PRIMARY KEY, term_id INTEGER, taxonomy TEXT, description TEXT, parent INTEGER DEFAULT 0)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %sterm_relationships (object_id INTEGER, term_taxonomy_id INTEGER)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %susers (ID INTEGER PRIMARY KEY, user_login TEXT, user_email TEXT, display_name TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %susermeta (umeta_id INTEGER PRIMARY KEY, user_id INTEGER, meta_key TEXT, meta_value TEXT)', $prefix ) );
@@ -404,16 +441,28 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 
 		$database->exec( sprintf( "INSERT INTO %susers (ID, user_login, user_email, display_name) VALUES (7, 'source_admin', 'admin@localhost', 'Source Admin')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (1, 7, 0, 'post', 'publish', 'Hello', 'Source post body', '', 'hello-source', '2026-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00', 'open', 'closed', '', 'https://source.example/?p=1')", $prefix ) );
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (2, 7, 1, 'page', 'publish', 'Front', 'Source page body', '', 'front-source', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00', 'closed', 'closed', '', 'https://source.example/?page_id=2')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (2, 7, 9, 'page', 'publish', 'Front', 'Source page body', '', 'front-source', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00', 'closed', 'closed', '', 'https://source.example/?page_id=2')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (3, 7, 0, 'attachment', 'inherit', 'Image', '', '', 'image', '2026-01-03 00:00:00', '2026-01-03 00:00:00', '2026-01-03 00:00:00', '2026-01-03 00:00:00', 'closed', 'closed', '', 'https://source.example/wp-content/uploads/2026/08/image.jpg')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (4, 7, 0, 'wp_navigation', 'publish', 'Nav', '', '', 'nav', '2026-01-04 00:00:00', '2026-01-04 00:00:00', '2026-01-04 00:00:00', '2026-01-04 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (5, 7, 0, 'book', 'publish', 'Book', '', '', 'book', '2026-01-05 00:00:00', '2026-01-05 00:00:00', '2026-01-05 00:00:00', '2026-01-05 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (6, 7, 0, 'post', 'auto-draft', 'Auto Draft', '', '', '', '2026-01-06 00:00:00', '2026-01-06 00:00:00', '2026-01-06 00:00:00', '2026-01-06 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (7, 7, 0, 'page', 'trash', 'Trash Page', '', '', 'trash-page', '2026-01-07 00:00:00', '2026-01-07 00:00:00', '2026-01-07 00:00:00', '2026-01-07 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (8, 7, 1, 'revision', 'inherit', 'Revision', '', '', '1-revision-v1', '2026-01-08 00:00:00', '2026-01-08 00:00:00', '2026-01-08 00:00:00', '2026-01-08 00:00:00', 'closed', 'closed', '', '')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, post_content, post_excerpt, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, comment_status, ping_status, post_password, guid) VALUES (9, 7, 5, 'page', 'publish', 'Child Container', 'Container page body', '', 'child-container', '2026-01-09 00:00:00', '2026-01-09 00:00:00', '2026-01-09 00:00:00', '2026-01-09 00:00:00', 'closed', 'closed', '', 'https://source.example/?page_id=9')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %spostmeta (post_id, meta_key, meta_value) VALUES (1, '_thumbnail_id', '3')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %spostmeta (post_id, meta_key, meta_value) VALUES (1, '_custom_plugin_setting', 'do-not-copy')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %spostmeta (post_id, meta_key, meta_value) VALUES (2, '_wp_page_template', 'templates/full-width.php')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %spostmeta (post_id, meta_key, meta_value) VALUES (2, '_thumbnail_id', '3')", $prefix ) );
 		$database->exec( sprintf( "INSERT INTO %spostmeta (post_id, meta_key, meta_value) VALUES (3, '_wp_attached_file', '2026/08/image.jpg')", $prefix ) );
-		$database->exec( sprintf( 'INSERT INTO %sterm_relationships (object_id, term_taxonomy_id) VALUES (1, 1)', $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sterms (term_id, name, slug) VALUES (10, 'News', 'news')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sterms (term_id, name, slug) VALUES (11, 'Desert', 'desert')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sterms (term_id, name, slug) VALUES (12, 'Source Mood', 'source-mood')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sterm_taxonomy (term_taxonomy_id, term_id, taxonomy, description, parent) VALUES (100, 10, 'category', 'Source category', 0)", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sterm_taxonomy (term_taxonomy_id, term_id, taxonomy, description, parent) VALUES (101, 11, 'post_tag', 'Source tag', 0)", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sterm_taxonomy (term_taxonomy_id, term_id, taxonomy, description, parent) VALUES (102, 12, 'mood', 'Unsupported taxonomy', 0)", $prefix ) );
+		$database->exec( sprintf( 'INSERT INTO %sterm_relationships (object_id, term_taxonomy_id) VALUES (1, 100)', $prefix ) );
+		$database->exec( sprintf( 'INSERT INTO %sterm_relationships (object_id, term_taxonomy_id) VALUES (1, 101)', $prefix ) );
+		$database->exec( sprintf( 'INSERT INTO %sterm_relationships (object_id, term_taxonomy_id) VALUES (1, 102)', $prefix ) );
 
 		$database->close();
 

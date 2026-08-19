@@ -74,6 +74,8 @@ final class SourceDataAccess {
 						'active' => $this->get_active_plugins( $database, $prefix ),
 					),
 					'content_items'     => $this->get_content_items( $database, $prefix ),
+					'postmeta'          => $this->get_postmeta_for_planning( $database, $prefix ),
+					'taxonomy'          => $this->get_taxonomy_for_planning( $database, $prefix ),
 					'users'             => $this->get_users( $database, $prefix ),
 					'options'           => $this->get_options_for_planning( $database, $prefix ),
 					'relationships'     => $this->get_relationships( $database, $prefix ),
@@ -406,6 +408,147 @@ final class SourceDataAccess {
 	}
 
 	/**
+	 * Get source post meta rows for planning.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function get_postmeta_for_planning( SQLite3 $database, string $prefix ): array {
+		$result = $database->query(
+			sprintf(
+				'SELECT pm.post_id, pm.meta_key, pm.meta_value FROM %s pm INNER JOIN %s p ON p.ID = pm.post_id WHERE p.post_type IN (\'post\', \'page\') ORDER BY pm.post_id, pm.meta_id',
+				$this->quote_identifier( $prefix . 'postmeta' ),
+				$this->quote_identifier( $prefix . 'posts' )
+			)
+		);
+
+		if ( false === $result ) {
+			return array();
+		}
+
+		$rows = array();
+		$row  = $result->fetchArray( SQLITE3_ASSOC );
+
+		while ( false !== $row ) {
+			$rows[] = array(
+				'post_id'    => (int) ( $row['post_id'] ?? 0 ),
+				// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+				'meta_key'   => (string) ( $row['meta_key'] ?? '' ),
+				// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value
+				'meta_value' => $this->maybe_unserialize( $row['meta_value'] ?? '' ),
+			);
+			$row    = $result->fetchArray( SQLITE3_ASSOC );
+		}
+
+		$result->finalize();
+
+		return $rows;
+	}
+
+	/**
+	 * Get source taxonomy data for planning.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @return array<string, array<int, array<string, mixed>>>
+	 */
+	private function get_taxonomy_for_planning( SQLite3 $database, string $prefix ): array {
+		return array(
+			'terms'         => $this->get_terms_for_planning( $database, $prefix ),
+			'relationships' => $this->get_term_relationships_for_planning( $database, $prefix ),
+		);
+	}
+
+	/**
+	 * Get terms and term taxonomy rows.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function get_terms_for_planning( SQLite3 $database, string $prefix ): array {
+		$terms_table         = $prefix . 'terms';
+		$term_taxonomy_table = $prefix . 'term_taxonomy';
+		$slug_expression     = $this->has_column( $database, $terms_table, 'slug' ) ? 't.slug' : "''";
+		$description_expr    = $this->has_column( $database, $term_taxonomy_table, 'description' ) ? 'tt.description' : "''";
+		$parent_expression   = $this->has_column( $database, $term_taxonomy_table, 'parent' ) ? 'tt.parent' : '0';
+
+		$result = $database->query(
+			sprintf(
+				'SELECT t.term_id, t.name, COALESCE(%s, \'\') AS slug, tt.term_taxonomy_id, tt.taxonomy, COALESCE(%s, \'\') AS description, COALESCE(%s, 0) AS parent FROM %s t INNER JOIN %s tt ON tt.term_id = t.term_id ORDER BY tt.term_taxonomy_id',
+				$slug_expression,
+				$description_expr,
+				$parent_expression,
+				$this->quote_identifier( $terms_table ),
+				$this->quote_identifier( $term_taxonomy_table )
+			)
+		);
+
+		if ( false === $result ) {
+			return array();
+		}
+
+		$terms = array();
+		$row   = $result->fetchArray( SQLITE3_ASSOC );
+
+		while ( false !== $row ) {
+			$terms[] = array(
+				'term_id'          => (int) ( $row['term_id'] ?? 0 ),
+				'name'             => (string) ( $row['name'] ?? '' ),
+				'slug'             => (string) ( $row['slug'] ?? '' ),
+				'term_taxonomy_id' => (int) ( $row['term_taxonomy_id'] ?? 0 ),
+				'taxonomy'         => (string) ( $row['taxonomy'] ?? '' ),
+				'description'      => (string) ( $row['description'] ?? '' ),
+				'parent'           => (int) ( $row['parent'] ?? 0 ),
+			);
+			$row     = $result->fetchArray( SQLITE3_ASSOC );
+		}
+
+		$result->finalize();
+
+		return $terms;
+	}
+
+	/**
+	 * Get term relationships.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function get_term_relationships_for_planning( SQLite3 $database, string $prefix ): array {
+		$result = $database->query(
+			sprintf(
+				'SELECT tr.object_id, tr.term_taxonomy_id, tt.term_id, tt.taxonomy FROM %s tr INNER JOIN %s tt ON tt.term_taxonomy_id = tr.term_taxonomy_id ORDER BY tr.object_id, tr.term_taxonomy_id',
+				$this->quote_identifier( $prefix . 'term_relationships' ),
+				$this->quote_identifier( $prefix . 'term_taxonomy' )
+			)
+		);
+
+		if ( false === $result ) {
+			return array();
+		}
+
+		$relationships = array();
+		$row           = $result->fetchArray( SQLITE3_ASSOC );
+
+		while ( false !== $row ) {
+			$relationships[] = array(
+				'object_source_id' => (int) ( $row['object_id'] ?? 0 ),
+				'term_taxonomy_id' => (int) ( $row['term_taxonomy_id'] ?? 0 ),
+				'term_id'          => (int) ( $row['term_id'] ?? 0 ),
+				'taxonomy'         => (string) ( $row['taxonomy'] ?? '' ),
+			);
+			$row             = $result->fetchArray( SQLITE3_ASSOC );
+		}
+
+		$result->finalize();
+
+		return $relationships;
+	}
+
+	/**
 	 * Get source options useful for planning.
 	 *
 	 * @param SQLite3 $database Read-only SQLite database.
@@ -590,6 +733,42 @@ final class SourceDataAccess {
 				$this->quote_identifier( $table )
 			)
 		);
+	}
+
+	/**
+	 * Check whether a SQLite table has a given column.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $table Table name.
+	 * @param string  $column Column name.
+	 * @return bool
+	 */
+	private function has_column( SQLite3 $database, string $table, string $column ): bool {
+		$result = $database->query(
+			sprintf(
+				'PRAGMA table_info(%s)',
+				$this->quote_identifier( $table )
+			)
+		);
+
+		if ( false === $result ) {
+			return false;
+		}
+
+		$row = $result->fetchArray( SQLITE3_ASSOC );
+
+		while ( false !== $row ) {
+			if ( (string) ( $row['name'] ?? '' ) === $column ) {
+				$result->finalize();
+				return true;
+			}
+
+			$row = $result->fetchArray( SQLITE3_ASSOC );
+		}
+
+		$result->finalize();
+
+		return false;
 	}
 
 	/**

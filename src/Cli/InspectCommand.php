@@ -114,7 +114,7 @@ final class InspectCommand {
 	}
 
 	/**
-	 * Execute the experimental Milestone 4 writer for supported posts/pages only.
+	 * Execute the experimental Milestone 5 writer for supported posts/pages and relationships.
 	 *
 	 * ## OPTIONS
 	 *
@@ -212,7 +212,7 @@ final class InspectCommand {
 	 */
 	private static function render_execute_summary( array $result ): void {
 		WP_CLI::line( 'WP Playground Importer experimental execution result' );
-		WP_CLI::line( 'Scope: published core posts/pages only' );
+		WP_CLI::line( 'Scope: published core posts/pages plus supported relationships, metadata, and taxonomies' );
 		WP_CLI::line( sprintf( 'Planned executable records: %d', $result['planned_executable_records'] ) );
 		WP_CLI::line( sprintf( 'Created records: %d', $result['created_records'] ) );
 		WP_CLI::line( sprintf( 'Skipped records: %d', count( $result['skipped_records'] ) ) );

@@ -16,6 +16,15 @@ use WP_Playground_Importer\Package\PackageInspectionResult;
  * Builds a read-only migration plan.
  */
 final class ImportPlanner {
+	private const SUPPORTED_META_KEYS = array(
+		'_wp_page_template',
+	);
+
+	private const SUPPORTED_TAXONOMIES = array(
+		'category',
+		'post_tag',
+	);
+
 	private const KNOWN_MIGRATABLE_POST_TYPES = array(
 		'post',
 		'page',
@@ -54,6 +63,8 @@ final class ImportPlanner {
 		$files   = $this->plan_files( $source, $package );
 		$users   = $this->plan_users( $source, $destination_data );
 		$tables  = $this->plan_tables( $source );
+		$meta    = $this->plan_metadata( $source );
+		$tax     = $this->plan_taxonomy( $source );
 
 		$warnings = array_merge(
 			$warnings,
@@ -86,13 +97,15 @@ final class ImportPlanner {
 				'destination'          => $destination_data,
 				'content'              => $content['plan'],
 				'executable_content'   => $content['operations'],
+				'metadata'             => $meta,
 				'users'                => $users['plan'],
 				'options'              => $options['plan'],
 				'theme'                => $theme['plan'],
 				'plugins'              => $plugins['plan'],
 				'files'                => $files['plan'],
 				'urls'                 => $this->plan_urls( $source, $destination_data ),
-				'relationships'        => $this->plan_relationships( $source ),
+				'relationships'        => $this->plan_relationships( $source, $content['operations'], $meta, $tax ),
+				'taxonomy'             => $tax,
 				'tables'               => $tables['plan'],
 				'warnings'             => $warnings,
 			)
@@ -442,15 +455,131 @@ final class ImportPlanner {
 	}
 
 	/**
-	 * Plan relationship remapping.
+	 * Plan post metadata migration.
 	 *
 	 * @param array<string, mixed> $source Source data.
+	 * @return array<string, array<int, array<string, mixed>>>
+	 */
+	private function plan_metadata( array $source ): array {
+		$metadata = array(
+			'migrate' => array(),
+			'defer'   => array(),
+			'review'  => array(),
+		);
+
+		foreach ( $source['postmeta'] as $row ) {
+			$key  = (string) $row['meta_key'];
+			$plan = array(
+				'source_post_id' => (int) $row['post_id'],
+				// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+				'meta_key'       => $key,
+				// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value
+				'meta_value'     => $row['meta_value'],
+			);
+
+			if ( in_array( $key, self::SUPPORTED_META_KEYS, true ) ) {
+				$plan['action']        = MigrationAction::MIGRATE;
+				$plan['is_executable'] = true;
+				$metadata['migrate'][] = $plan;
+				continue;
+			}
+
+			if ( '_thumbnail_id' === $key ) {
+				$plan['action']        = MigrationAction::REMAP;
+				$plan['is_executable'] = false;
+				$plan['reason']        = 'Featured image remapping is deferred until attachment migration is supported.';
+				$metadata['defer'][]   = $plan;
+				continue;
+			}
+
+			$plan['action']       = MigrationAction::REVIEW;
+			$plan['reason']       = 'Only allowlisted core post meta is copied by the MVP writer.';
+			$metadata['review'][] = $plan;
+		}
+
+		return $metadata;
+	}
+
+	/**
+	 * Plan taxonomy term and relationship migration.
+	 *
+	 * @param array<string, mixed> $source Source data.
+	 * @return array<string, array<int, array<string, mixed>>>
+	 */
+	private function plan_taxonomy( array $source ): array {
+		$taxonomy = array(
+			'terms'         => array(),
+			'relationships' => array(),
+		);
+
+		foreach ( $source['taxonomy']['terms'] as $term ) {
+			$supported = in_array( $term['taxonomy'], self::SUPPORTED_TAXONOMIES, true );
+
+			$taxonomy['terms'][] = array(
+				'term_id'          => (int) $term['term_id'],
+				'name'             => $term['name'],
+				'slug'             => $term['slug'],
+				'term_taxonomy_id' => (int) $term['term_taxonomy_id'],
+				'taxonomy'         => $term['taxonomy'],
+				'description'      => $term['description'],
+				'parent'           => (int) $term['parent'],
+				'action'           => $supported ? MigrationAction::MIGRATE : MigrationAction::REVIEW,
+				'is_executable'    => $supported,
+				'reason'           => $supported ? 'Core category and post_tag terms are supported.' : 'Custom taxonomies are deferred for review.',
+			);
+		}
+
+		foreach ( $source['taxonomy']['relationships'] as $relationship ) {
+			$supported = in_array( $relationship['taxonomy'], self::SUPPORTED_TAXONOMIES, true );
+
+			$taxonomy['relationships'][] = array(
+				'object_source_id' => (int) $relationship['object_source_id'],
+				'term_id'          => (int) $relationship['term_id'],
+				'term_taxonomy_id' => (int) $relationship['term_taxonomy_id'],
+				'taxonomy'         => $relationship['taxonomy'],
+				'action'           => $supported ? MigrationAction::REMAP : MigrationAction::REVIEW,
+				'is_executable'    => $supported,
+				'reason'           => $supported ? 'Core taxonomy relationships are remapped after posts and terms are created.' : 'Custom taxonomy relationships are deferred for review.',
+			);
+		}
+
+		return $taxonomy;
+	}
+
+	/**
+	 * Plan relationship remapping.
+	 *
+	 * @param array<string, mixed>                           $source Source data.
+	 * @param array<int, array<string, mixed>>               $content_operations Planned content operations.
+	 * @param array<string, array<int, array<string,mixed>>> $metadata Planned metadata.
+	 * @param array<string, array<int, array<string,mixed>>> $taxonomy Planned taxonomy.
 	 * @return array<string, mixed>
 	 */
-	private function plan_relationships( array $source ): array {
+	private function plan_relationships( array $source, array $content_operations, array $metadata, array $taxonomy ): array {
+		$parents = array();
+
+		foreach ( $content_operations as $operation ) {
+			$parent_id = (int) $operation['source_record']['parent_id'];
+
+			if ( 0 >= $parent_id ) {
+				continue;
+			}
+
+			$parents[] = array(
+				'source_id'        => (int) $operation['source_id'],
+				'parent_source_id' => $parent_id,
+				'action'           => MigrationAction::REMAP,
+				'is_executable'    => ! empty( $operation['is_executable'] ),
+				'reason'           => ! empty( $operation['is_executable'] ) ? 'Parent relationships are applied after destination IDs are known.' : 'Parent relationship belongs to content that is not executable.',
+			);
+		}
+
 		return array(
-			'summary' => $source['relationships'],
-			'action'  => MigrationAction::REMAP,
+			'summary'         => $source['relationships'],
+			'post_parents'    => $parents,
+			'featured_images' => $metadata['defer'],
+			'taxonomy'        => $taxonomy['relationships'],
+			'action'          => MigrationAction::REMAP,
 		);
 	}
 

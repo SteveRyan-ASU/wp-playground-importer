@@ -121,7 +121,9 @@ Planning currently includes:
 - option classification for migrate, remap, preserve-destination, and review behavior
 - source/destination theme and plugin comparison
 - upload-file inventory from package entries without copying files
-- relationship summaries for future ID remapping
+- relationship summaries and concrete post parent, featured image, and taxonomy relationship edges for ID remapping
+- core metadata classification, with `_wp_page_template` allowlisted and featured-image metadata deferred
+- core taxonomy classification for `category` and `post_tag`
 - source-to-destination URL transformation requirements
 - review warnings for unknown post types, unavailable themes/plugins, additional source tables, and populated destinations
 
@@ -138,7 +140,7 @@ The CLI is only a developer planning surface. Planning does not create content, 
 
 ## Experimental Execution
 
-Milestone 4 adds a deliberately narrow developer-only execution command:
+Milestone 5 provides a deliberately narrow developer-only execution command:
 
 ```bash
 npm run env:cli -- playground-importer execute wp-content/plugins/wp-playground-importer/local-playground-exports/example.zip
@@ -153,7 +155,16 @@ Execution is not a full importer. It only creates executable source records that
 
 Execution refuses to run when the destination is populated, multisite is detected, or a safe author mapping cannot be established. There is no force, merge, overwrite, rollback, duplicate-detection, or production mode.
 
-The writer uses `wp_insert_post()` and returns a structured result containing planned executable records, created records, source-ID to destination-ID map, skipped records, failed records, blockers, warnings, and deferred work.
+The writer uses normal WordPress APIs and executes in multiple passes:
+
+- create supported posts/pages with `wp_insert_post()`
+- create or reuse supported `category` and `post_tag` terms
+- apply mapped post parent relationships with `wp_update_post()`
+- migrate allowlisted core metadata
+- assign supported taxonomy relationships with `wp_set_object_terms()`
+- report deferred/review work without writing unsupported data
+
+The structured result includes planned executable records, created records, source-to-destination post and term maps, skipped records, failed records, blockers, warnings, relationship outcomes, metadata outcomes, taxonomy outcomes, and deferred work.
 
 Status behavior for core posts/pages:
 
@@ -162,7 +173,17 @@ Status behavior for core posts/pages:
 - `trash`: skipped
 - `draft`: skipped for now
 
-Revisions are explicitly skipped. Attachments, navigation, templates, template parts, global styles, custom post types, postmeta, taxonomy data, options, themes, plugins, uploads, and URL rewriting remain deferred.
+Supported relationship/data behavior:
+
+- mapped post/page parents are applied after destination post IDs are known
+- unresolved parents are left unset and reported as deferred
+- `_wp_page_template` is copied when its source post/page was migrated
+- `_thumbnail_id` is recognized as a featured-image relationship but remains deferred until attachment migration exists
+- unknown or plugin-specific postmeta is reported for review and is not copied
+- `category` and `post_tag` terms are created or reused, then assigned to migrated posts/pages
+- custom taxonomies are reported for review and are not created or assigned
+
+Revisions are explicitly skipped. Attachments, navigation, templates, template parts, global styles, custom post types, arbitrary postmeta, custom taxonomies, comments, options, themes, plugins, uploads, and URL rewriting remain deferred.
 
 Run the same export only against disposable `wp-env` environments. A second execution against the same destination is expected to be blocked once the destination is populated; idempotent imports are intentionally not implemented yet.
 
@@ -206,14 +227,13 @@ The eventual importer should treat a Playground SQLite database as a source data
 
 The following remain intentionally out of scope:
 
-- Playground ZIP validation
-- ZIP extraction
-- SQLite parsing
-- SQLite to MySQL/MariaDB migration
-- WordPress content migration
+- broad Playground ZIP validation
+- full ZIP extraction
+- direct SQLite to MySQL/MariaDB migration
+- general WordPress content migration
 - media migration
 - URL rewriting
-- user mapping
+- user creation or credential migration
 - theme/plugin migration
 - admin UI
 - production WP-CLI importer commands
@@ -229,6 +249,8 @@ Current planning limitations:
 
 - Author mapping is proposed to an existing destination administrator; no user creation or credential migration is attempted.
 - Unknown/custom post types are surfaced for review rather than assumed safe.
+- Only published core posts/pages are executable.
+- Parent, term, and allowlisted metadata preservation is limited to the controlled Milestone 5 paths described above.
 - Plugin-specific tables are inventoried and marked for review; plugin-data migration is not implemented.
 - Theme/plugin availability is compared only against what is already installed on the destination.
 - URL and ID remapping requirements are identified, but no transformation engine exists yet.
