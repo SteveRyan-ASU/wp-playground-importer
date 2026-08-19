@@ -41,17 +41,71 @@ final class DestinationInspector {
 	 * @return array<string, mixed>
 	 */
 	private function inspect_content(): array {
-		$counts = wp_count_posts();
-		$total  = 0;
+		$post_types          = array( 'post', 'page', 'attachment' );
+		$meaningful_statuses = array( 'publish', 'draft', 'pending', 'private', 'future' );
+		$counts              = array();
+		$total               = 0;
 
-		foreach ( get_object_vars( $counts ) as $count ) {
-			$total += (int) $count;
+		foreach ( $post_types as $post_type ) {
+			$counts[ $post_type ] = array();
+
+			foreach ( $meaningful_statuses as $status ) {
+				$ids = get_posts(
+					array(
+						'fields'         => 'ids',
+						'post_type'      => $post_type,
+						'post_status'    => $status,
+						'posts_per_page' => -1,
+						'orderby'        => 'ID',
+						'order'          => 'ASC',
+					)
+				);
+
+				$meaningful_ids = array_filter(
+					$ids,
+					fn ( int $post_id ): bool => ! $this->is_stock_wordpress_content( $post_id )
+				);
+
+				$counts[ $post_type ][ $status ] = count( $meaningful_ids );
+				$total                          += count( $meaningful_ids );
+			}
 		}
 
 		return array(
-			'post_counts' => get_object_vars( $counts ),
-			'total_posts' => $total,
-			'freshness'   => $total <= 1 ? 'fresh_or_nearly_fresh' : 'populated',
+			'meaningful_counts' => $counts,
+			'meaningful_total'  => $total,
+			'freshness'         => 0 === $total ? 'fresh_or_nearly_fresh' : 'populated',
+		);
+	}
+
+	/**
+	 * Determine whether a post is stock WordPress starter content.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return bool
+	 */
+	private function is_stock_wordpress_content( int $post_id ): bool {
+		$post = get_post( $post_id );
+
+		if ( ! $post ) {
+			return false;
+		}
+
+		$stock_records = array(
+			'post:hello-world:publish',
+			'page:sample-page:publish',
+			'page:privacy-policy:draft',
+		);
+
+		return in_array(
+			sprintf(
+				'%s:%s:%s',
+				$post->post_type,
+				$post->post_name,
+				$post->post_status
+			),
+			$stock_records,
+			true
 		);
 	}
 

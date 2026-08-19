@@ -180,6 +180,37 @@ final class MigrationPlanningTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Destination pages are meaningful content and block execution even without posts.
+	 */
+	public function test_execution_blocks_destination_with_existing_page_only(): void {
+		self::factory()->post->create(
+			array(
+				'post_type'   => 'page',
+				'post_title'  => 'Existing Destination Page',
+				'post_status' => 'publish',
+			)
+		);
+
+		$inspection = ( new DestinationInspector() )->inspect()->to_array();
+		$result     = ( new WordPressDestinationWriter() )->execute( $this->plan_zip_object( $this->create_playground_zip( 'page_block_' ) ) )->to_array();
+
+		$this->assertSame( 0, (int) wp_count_posts( 'post' )->publish );
+		$this->assertSame( 'populated', $inspection['content']['freshness'] );
+		$this->assertSame( 1, $inspection['content']['meaningful_counts']['page']['publish'] );
+		$this->assertSame( 0, $result['created_records'] );
+		$this->assertSame( 'destination_populated', $result['blocking_errors'][0]['code'] );
+		$this->assertEmpty(
+			get_posts(
+				array(
+					'post_type'   => 'post',
+					'post_status' => 'publish',
+					'title'       => 'Hello',
+				)
+			)
+		);
+	}
+
+	/**
 	 * Create a migration plan for a synthetic Playground package.
 	 *
 	 * @param string $prefix Source table prefix.
