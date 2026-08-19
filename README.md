@@ -62,6 +62,47 @@ npm run env:cli -- option get siteurl
 npm run env:cli -- post list
 ```
 
+## Playground Package Inspection
+
+The plugin can now perform read-only inspection of a WordPress Playground export ZIP. Inspection currently:
+
+- recognizes a candidate ZIP by checking for `playground-export.json`, `wp-content/`, and `wp-content/database/.ht.sqlite`
+- reads and decodes `playground-export.json`
+- extracts only `.ht.sqlite` to a temporary file for inspection
+- opens the SQLite database with `SQLite3` in read-only mode
+- detects the WordPress table prefix from source database tables instead of hard-coding `wp_`
+- verifies expected WordPress tables are present
+- reports source `home`, `siteurl`, table prefix, table list, content counts by post type/status, active theme options, and active plugin paths
+
+Inspection does not import, copy, activate, migrate, or persist source package data into the destination WordPress site.
+
+### SQLite Support
+
+In the current `wp-env` runtime, PHP 8.3.33 provides:
+
+- `SQLite3`
+- `PDO`
+- `pdo_sqlite`
+- `ZipArchive`
+
+The implementation uses `ZipArchive` for archive access and `SQLite3` with `SQLITE3_OPEN_READONLY` for source database inspection.
+
+### Manual Inspection
+
+Real Playground exports should not be committed unless they have been deliberately reviewed and sanitized. For local manual testing, place or copy exports under the ignored directory:
+
+```text
+local-playground-exports/
+```
+
+Then inspect a local export with:
+
+```bash
+npm run env:cli -- playground-importer inspect wp-content/plugins/wp-playground-importer/local-playground-exports/example.zip
+```
+
+The command prints a JSON inspection result. It is a developer inspection surface only; it is not a production importer command.
+
 ## Checks and Tests
 
 ```bash
@@ -87,9 +128,11 @@ tests/fixtures/playground-zips/
 
 Do not add ad hoc Playground exports. Fixtures should be purpose-built or deliberately selected, then reviewed for credentials, user data, environment-specific values, unnecessary media, and repository size before committing.
 
+Automated tests currently generate the smallest synthetic ZIP and SQLite fixtures needed at runtime. CI does not depend on a private or local real-world Playground export.
+
 ## Current Scope
 
-This scaffold reserves lightweight namespaces for the future importer architecture:
+This project reserves lightweight namespaces for the importer architecture:
 
 - Playground package validation and reading
 - Playground source-data access
@@ -98,7 +141,7 @@ This scaffold reserves lightweight namespaces for the future importer architectu
 
 The eventual importer should treat a Playground SQLite database as a source datastore. It must not assume the destination WordPress site uses SQLite.
 
-The following are intentionally out of scope for this scaffold:
+The following remain intentionally out of scope:
 
 - Playground ZIP validation
 - ZIP extraction
@@ -112,6 +155,12 @@ The following are intentionally out of scope for this scaffold:
 - admin UI
 - production WP-CLI importer commands
 - actual importer behavior
+
+Current inspection limitations:
+
+- WordPress product version is reported as unavailable unless it can be derived reliably later; the source database schema `db_version` is exposed separately.
+- Multisite packages are not supported.
+- No destination writes are performed, including options, posts, users, themes, plugins, uploads, or package state.
 
 ## References
 

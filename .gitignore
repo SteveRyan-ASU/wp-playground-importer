@@ -15,6 +15,7 @@
 /license.txt
 /readme.html
 /wp-*.php
+!/wp-playground-importer.php
 /xmlrpc.php
 
 # Configuration
@@ -40,6 +41,7 @@ wp-config.php
 /.wp-env/
 /.phpunit.result.cache
 /.phpunit.cache/
+/local-playground-exports/
 
 # htaccess
 /.htaccess
