@@ -73,6 +73,11 @@ final class SourceDataAccess {
 					'plugins'           => array(
 						'active' => $this->get_active_plugins( $database, $prefix ),
 					),
+					'content_items'     => $this->get_content_items( $database, $prefix ),
+					'users'             => $this->get_users( $database, $prefix ),
+					'options'           => $this->get_options_for_planning( $database, $prefix ),
+					'relationships'     => $this->get_relationships( $database, $prefix ),
+					'additional_tables' => $this->get_additional_tables( $tables, $prefix ),
 				)
 			);
 		} finally {
@@ -309,6 +314,283 @@ final class SourceDataAccess {
 				static fn ( mixed $plugin ): bool => is_string( $plugin )
 			)
 		);
+	}
+
+	/**
+	 * Get source content items relevant to migration planning.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function get_content_items( SQLite3 $database, string $prefix ): array {
+		$result = $database->query(
+			sprintf(
+				'SELECT ID, post_author, post_parent, post_type, post_status, post_title, guid FROM %s ORDER BY ID',
+				$this->quote_identifier( $prefix . 'posts' )
+			)
+		);
+
+		if ( false === $result ) {
+			return array();
+		}
+
+		$items = array();
+		$row   = $result->fetchArray( SQLITE3_ASSOC );
+
+		while ( false !== $row ) {
+			$items[] = array(
+				'id'            => (int) ( $row['ID'] ?? 0 ),
+				'author_id'     => (int) ( $row['post_author'] ?? 0 ),
+				'parent_id'     => (int) ( $row['post_parent'] ?? 0 ),
+				'type'          => (string) ( $row['post_type'] ?? '' ),
+				'status'        => (string) ( $row['post_status'] ?? '' ),
+				'title'         => (string) ( $row['post_title'] ?? '' ),
+				'guid'          => (string) ( $row['guid'] ?? '' ),
+				'attached_file' => $this->get_post_meta( $database, $prefix, (int) ( $row['ID'] ?? 0 ), '_wp_attached_file' ),
+			);
+			$row     = $result->fetchArray( SQLITE3_ASSOC );
+		}
+
+		$result->finalize();
+
+		return $items;
+	}
+
+	/**
+	 * Get source users without exposing credentials.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function get_users( SQLite3 $database, string $prefix ): array {
+		$result = $database->query(
+			sprintf(
+				'SELECT ID, user_login, user_email, display_name FROM %s ORDER BY ID',
+				$this->quote_identifier( $prefix . 'users' )
+			)
+		);
+
+		if ( false === $result ) {
+			return array();
+		}
+
+		$users = array();
+		$row   = $result->fetchArray( SQLITE3_ASSOC );
+
+		while ( false !== $row ) {
+			$users[] = array(
+				'id'           => (int) ( $row['ID'] ?? 0 ),
+				'login'        => (string) ( $row['user_login'] ?? '' ),
+				'email_domain' => $this->email_domain( (string) ( $row['user_email'] ?? '' ) ),
+				'display_name' => (string) ( $row['display_name'] ?? '' ),
+			);
+			$row     = $result->fetchArray( SQLITE3_ASSOC );
+		}
+
+		$result->finalize();
+
+		return $users;
+	}
+
+	/**
+	 * Get source options useful for planning.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @return array<string, mixed>
+	 */
+	private function get_options_for_planning( SQLite3 $database, string $prefix ): array {
+		$option_names = array(
+			'home',
+			'siteurl',
+			'show_on_front',
+			'page_on_front',
+			'page_for_posts',
+			'permalink_structure',
+			'template',
+			'stylesheet',
+			'active_plugins',
+			'upload_path',
+		);
+		$options      = array();
+
+		foreach ( $option_names as $option_name ) {
+			$options[ $option_name ] = $this->get_option( $database, $prefix, $option_name );
+		}
+
+		return $options;
+	}
+
+	/**
+	 * Get known source relationships that will require remapping.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @return array<string, mixed>
+	 */
+	private function get_relationships( SQLite3 $database, string $prefix ): array {
+		return array(
+			'post_authors'       => $this->count_distinct_post_values( $database, $prefix, 'post_author', 'post_author > 0' ),
+			'post_parents'       => $this->count_distinct_post_values( $database, $prefix, 'post_parent', 'post_parent > 0' ),
+			'featured_images'    => $this->count_meta_rows( $database, $prefix, '_thumbnail_id' ),
+			'attachment_files'   => $this->count_meta_rows( $database, $prefix, '_wp_attached_file' ),
+			'taxonomy_links'     => $this->count_rows( $database, $prefix . 'term_relationships' ),
+			'front_page_options' => array_filter(
+				array(
+					'page_on_front'  => $this->get_option( $database, $prefix, 'page_on_front' ),
+					'page_for_posts' => $this->get_option( $database, $prefix, 'page_for_posts' ),
+				)
+			),
+		);
+	}
+
+	/**
+	 * Get source tables outside the recognized WordPress core set.
+	 *
+	 * @param array<int, string> $tables Table names.
+	 * @param string             $prefix Table prefix.
+	 * @return array<int, string>
+	 */
+	private function get_additional_tables( array $tables, string $prefix ): array {
+		$core_suffixes = array_merge(
+			self::REQUIRED_TABLE_SUFFIXES,
+			array( 'comments', 'commentmeta', 'links', 'termmeta' )
+		);
+		$core_tables   = array_map(
+			static fn ( string $suffix ): string => $prefix . $suffix,
+			$core_suffixes
+		);
+
+		return array_values(
+			array_filter(
+				$tables,
+				static fn ( string $table ): bool => ! in_array( $table, $core_tables, true ) && ! str_starts_with( $table, '_wp_sqlite_' )
+			)
+		);
+	}
+
+	/**
+	 * Get a single post meta value.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @param int     $post_id Post ID.
+	 * @param string  $meta_key Meta key.
+	 * @return mixed
+	 */
+	private function get_post_meta( SQLite3 $database, string $prefix, int $post_id, string $meta_key ): mixed {
+		$statement = $database->prepare(
+			sprintf(
+				'SELECT meta_value FROM %s WHERE post_id = :post_id AND meta_key = :meta_key LIMIT 1',
+				$this->quote_identifier( $prefix . 'postmeta' )
+			)
+		);
+
+		if ( false === $statement ) {
+			return null;
+		}
+
+		$statement->bindValue( ':post_id', $post_id, SQLITE3_INTEGER );
+		$statement->bindValue( ':meta_key', $meta_key, SQLITE3_TEXT );
+		$result = $statement->execute();
+
+		if ( false === $result ) {
+			$statement->close();
+			return null;
+		}
+
+		$row = $result->fetchArray( SQLITE3_ASSOC );
+		$result->finalize();
+		$statement->close();
+
+		return is_array( $row ) && array_key_exists( 'meta_value', $row ) ? $this->maybe_unserialize( $row['meta_value'] ) : null;
+	}
+
+	/**
+	 * Count distinct values in the posts table.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @param string  $column Known column name.
+	 * @param string  $where Known WHERE clause.
+	 * @return int
+	 */
+	private function count_distinct_post_values( SQLite3 $database, string $prefix, string $column, string $where ): int {
+		$result = $database->querySingle(
+			sprintf(
+				'SELECT COUNT(DISTINCT %s) FROM %s WHERE %s',
+				$column,
+				$this->quote_identifier( $prefix . 'posts' ),
+				$where
+			)
+		);
+
+		return (int) $result;
+	}
+
+	/**
+	 * Count rows for a known meta key.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $prefix Table prefix.
+	 * @param string  $meta_key Meta key.
+	 * @return int
+	 */
+	private function count_meta_rows( SQLite3 $database, string $prefix, string $meta_key ): int {
+		$statement = $database->prepare(
+			sprintf(
+				'SELECT COUNT(*) FROM %s WHERE meta_key = :meta_key',
+				$this->quote_identifier( $prefix . 'postmeta' )
+			)
+		);
+
+		if ( false === $statement ) {
+			return 0;
+		}
+
+		$statement->bindValue( ':meta_key', $meta_key, SQLITE3_TEXT );
+		$result = $statement->execute();
+
+		if ( false === $result ) {
+			$statement->close();
+			return 0;
+		}
+
+		$row = $result->fetchArray( SQLITE3_NUM );
+		$result->finalize();
+		$statement->close();
+
+		return is_array( $row ) ? (int) $row[0] : 0;
+	}
+
+	/**
+	 * Count rows in a known table.
+	 *
+	 * @param SQLite3 $database Read-only SQLite database.
+	 * @param string  $table Table name.
+	 * @return int
+	 */
+	private function count_rows( SQLite3 $database, string $table ): int {
+		return (int) $database->querySingle(
+			sprintf(
+				'SELECT COUNT(*) FROM %s',
+				$this->quote_identifier( $table )
+			)
+		);
+	}
+
+	/**
+	 * Return only the email domain for low-sensitivity planning output.
+	 *
+	 * @param string $email Email address.
+	 * @return string|null
+	 */
+	private function email_domain( string $email ): ?string {
+		$parts = explode( '@', $email );
+
+		return 2 === count( $parts ) ? $parts[1] : null;
 	}
 
 	/**

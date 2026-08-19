@@ -50,6 +50,15 @@ final class PackageInspectionResult {
 	}
 
 	/**
+	 * Get normalized ZIP entries.
+	 *
+	 * @return array<int, string>
+	 */
+	public function get_entries(): array {
+		return $this->data['entries'];
+	}
+
+	/**
 	 * Convert result to an array for tests, CLI, or future UI.
 	 *
 	 * @return array<string, mixed>
@@ -62,9 +71,24 @@ final class PackageInspectionResult {
 				'manifest_path' => $this->data['manifest_path'],
 				'database_path' => $this->data['database_path'],
 				'manifest'      => $this->get_manifest(),
+				'uploads'       => $this->get_upload_entries(),
 			),
 			'source'   => $source->to_array(),
 			'warnings' => array(),
+		);
+	}
+
+	/**
+	 * Get upload file entries from the archive.
+	 *
+	 * @return array<int, string>
+	 */
+	public function get_upload_entries(): array {
+		return array_values(
+			array_filter(
+				$this->get_entries(),
+				static fn ( string $entry ): bool => str_starts_with( $entry, 'wp-content/uploads/' ) && ! str_ends_with( $entry, '/' )
+			)
 		);
 	}
 }

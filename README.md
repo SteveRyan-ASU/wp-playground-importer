@@ -103,6 +103,38 @@ npm run env:cli -- playground-importer inspect wp-content/plugins/wp-playground-
 
 The command prints a JSON inspection result. It is a developer inspection surface only; it is not a production importer command.
 
+## Migration Planning
+
+The plugin can also generate a read-only migration plan. The planner compares an inspected Playground source package with the current destination WordPress installation and returns a structured description of what a future import would need to do.
+
+```bash
+npm run env:cli -- playground-importer plan wp-content/plugins/wp-playground-importer/local-playground-exports/example.zip
+npm run env:cli -- playground-importer plan wp-content/plugins/wp-playground-importer/local-playground-exports/example.zip --format=json
+```
+
+Planning currently includes:
+
+- destination site inspection through normal WordPress APIs
+- destination freshness classification as `fresh_or_nearly_fresh` or `populated`
+- source content classification by post type and status
+- source author mapping proposals to an existing destination administrator
+- option classification for migrate, remap, preserve-destination, and review behavior
+- source/destination theme and plugin comparison
+- upload-file inventory from package entries without copying files
+- relationship summaries for future ID remapping
+- source-to-destination URL transformation requirements
+- review warnings for unknown post types, unavailable themes/plugins, additional source tables, and populated destinations
+
+The plan uses these action classifications:
+
+- `migrate`: source data should eventually be reproduced on the destination
+- `remap`: source data is meaningful but requires ID or URL transformation
+- `preserve_destination`: destination value should not be overwritten by source data
+- `review`: behavior is uncertain and requires a future decision
+- `unsupported`: reserved for explicitly unsupported future cases
+
+The CLI is only a developer planning surface. Planning does not create content, copy uploads, install themes/plugins, activate anything, migrate options, rewrite URLs, allocate IDs, or modify either database.
+
 ## Checks and Tests
 
 ```bash
@@ -161,6 +193,14 @@ Current inspection limitations:
 - WordPress product version is reported as unavailable unless it can be derived reliably later; the source database schema `db_version` is exposed separately.
 - Multisite packages are not supported.
 - No destination writes are performed, including options, posts, users, themes, plugins, uploads, or package state.
+
+Current planning limitations:
+
+- Author mapping is proposed to an existing destination administrator; no user creation or credential migration is attempted.
+- Unknown/custom post types are surfaced for review rather than assumed safe.
+- Plugin-specific tables are inventoried and marked for review; plugin-data migration is not implemented.
+- Theme/plugin availability is compared only against what is already installed on the destination.
+- URL and ID remapping requirements are identified, but no transformation engine exists yet.
 
 ## References
 

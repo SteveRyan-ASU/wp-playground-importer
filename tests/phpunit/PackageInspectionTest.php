@@ -279,12 +279,12 @@ final class PackageInspectionTest extends WP_UnitTestCase {
 		$database      = new SQLite3( $database_path );
 
 		$database->exec( sprintf( 'CREATE TABLE %soptions (option_name TEXT PRIMARY KEY, option_value TEXT)', $prefix ) );
-		$database->exec( sprintf( 'CREATE TABLE %sposts (ID INTEGER PRIMARY KEY, post_type TEXT, post_status TEXT, post_title TEXT)', $prefix ) );
+		$database->exec( sprintf( 'CREATE TABLE %sposts (ID INTEGER PRIMARY KEY, post_author INTEGER DEFAULT 0, post_parent INTEGER DEFAULT 0, post_type TEXT, post_status TEXT, post_title TEXT, guid TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %spostmeta (meta_id INTEGER PRIMARY KEY, post_id INTEGER, meta_key TEXT, meta_value TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %sterms (term_id INTEGER PRIMARY KEY, name TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %sterm_taxonomy (term_taxonomy_id INTEGER PRIMARY KEY, term_id INTEGER, taxonomy TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %sterm_relationships (object_id INTEGER, term_taxonomy_id INTEGER)', $prefix ) );
-		$database->exec( sprintf( 'CREATE TABLE %susers (ID INTEGER PRIMARY KEY, user_login TEXT)', $prefix ) );
+		$database->exec( sprintf( 'CREATE TABLE %susers (ID INTEGER PRIMARY KEY, user_login TEXT, user_email TEXT, display_name TEXT)', $prefix ) );
 		$database->exec( sprintf( 'CREATE TABLE %susermeta (umeta_id INTEGER PRIMARY KEY, user_id INTEGER, meta_key TEXT, meta_value TEXT)', $prefix ) );
 
 		$this->insert_option( $database, $prefix, 'home', 'https://source.example' );
@@ -294,8 +294,9 @@ final class PackageInspectionTest extends WP_UnitTestCase {
 		$this->insert_option( $database, $prefix, 'template', 'twentytwentysix' );
 		$this->insert_option( $database, $prefix, 'active_plugins', serialize( array( 'hello/hello.php' ) ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize
 
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_type, post_status, post_title) VALUES (1, 'post', 'publish', 'Hello')", $prefix ) );
-		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_type, post_status, post_title) VALUES (2, 'page', 'draft', 'Draft Page')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %susers (ID, user_login, user_email, display_name) VALUES (1, 'admin', 'admin@localhost', 'Admin')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, guid) VALUES (1, 1, 0, 'post', 'publish', 'Hello', 'https://source.example/?p=1')", $prefix ) );
+		$database->exec( sprintf( "INSERT INTO %sposts (ID, post_author, post_parent, post_type, post_status, post_title, guid) VALUES (2, 1, 1, 'page', 'draft', 'Draft Page', 'https://source.example/?page_id=2')", $prefix ) );
 
 		$database->close();
 
